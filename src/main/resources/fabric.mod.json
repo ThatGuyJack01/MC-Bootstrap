@@ -15,12 +15,9 @@
 	"icon": "assets/bootstrap/icon.png",
 	"environment": "*",
 	"entrypoints": {
-		"main": [
-			"com.thatguyjack.bootstrap.Bootstrap"
-		],
-		"fabric-datagen": [
-			"com.thatguyjack.bootstrap.BootstrapDataGenerator"
-		]
+		"main": ["com.thatguyjack.bootstrap.Bootstrap"],
+        "client": ["com.thatguyjack.bootstrap.BootstrapClient"],
+		"fabric-datagen": ["com.thatguyjack.bootstrap.BootstrapDataGenerator"]
 	},
 	"mixins": [
 		"bootstrap.mixins.json"
