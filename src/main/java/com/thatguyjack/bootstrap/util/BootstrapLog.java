@@ -6,7 +6,7 @@ import org.slf4j.LoggerFactory;
 public final class BootstrapLog {
     private static final Logger LOG = LoggerFactory.getLogger("bootstrap");
 
-    public static void info(String msg) { LOG.info(msg); }
-    public static void warn(String msg) { LOG.warn(msg); }
-    public static void error(String msg, Throwable t) { LOG.error(msg, t); }
+    public static void info(String msg) { LOG.info("[BOOTSTRAP] "+msg); }
+    public static void warn(String msg) { LOG.warn("[BOOTSTRAP] "+msg); }
+    public static void error(String msg, Throwable t) { LOG.error("[BOOTSTRAP] "+msg, t); }
 }

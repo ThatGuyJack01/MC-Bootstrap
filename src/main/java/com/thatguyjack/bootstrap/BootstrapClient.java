@@ -14,6 +14,9 @@ public class BootstrapClient implements ClientModInitializer {
     public static final String MODID = "bootstrap";
     public static final Gson GSON = new Gson();
 
+    private static volatile boolean pendingRestartScreen = false;
+    private static volatile String pendingRestartDetails = "";
+
     @Override
     public void onInitializeClient() {
         CompletableFuture.runAsync(() -> {
@@ -68,9 +71,6 @@ public class BootstrapClient implements ClientModInitializer {
 
         // Schedule UI + exit on main thread
         MinecraftClient client = MinecraftClient.getInstance();
-        client.execute(() -> {
-            BootstrapUi.showRestartRequiredScreen(client, plan.summaryText());
-            // Alternative: client.scheduleStop(); (or System.exit(0) as last resort)
-        });
+        client.execute(() -> { BootstrapUi.showRestartRequiredScreen(client, plan.summaryText()); });
     }
 }
