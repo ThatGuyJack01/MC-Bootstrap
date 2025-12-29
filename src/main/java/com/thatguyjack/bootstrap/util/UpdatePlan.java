@@ -17,11 +17,11 @@ public final class UpdatePlan {
     }
 
     public static final class DownloadTask {
-        public final Manifest.ManifestMod mod;
+        public final Manifest.ModEntry mod;
         public final Path targetJar;
         public final Path stagingFile;
 
-        public DownloadTask(Manifest.ManifestMod mod, Path targetJar, Path stagingFile) {
+        public DownloadTask(Manifest.ModEntry mod, Path targetJar, Path stagingFile) {
             this.mod = mod;
             this.targetJar = targetJar;
             this.stagingFile = stagingFile;
