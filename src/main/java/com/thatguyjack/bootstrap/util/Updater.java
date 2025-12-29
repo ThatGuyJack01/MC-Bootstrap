@@ -1,113 +1,102 @@
 package com.thatguyjack.bootstrap.util;
 
-import java.io.InputStream;
+import com.google.gson.JsonSyntaxException;
+import com.thatguyjack.bootstrap.BootstrapClient;
+
+import java.io.IOException;
 import java.net.URI;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
-import java.time.Duration;
-import java.util.HashSet;
-import java.util.Set;
+import java.net.http.*;
+import java.nio.file.*;
+import java.security.MessageDigest;
+import java.util.*;
 
 public final class Updater {
-    public static UpdatePlan computePlan(Path modsDir, Path stagingDir, Manifest manifest, InstalledState installed) throws Exception {
-        UpdatePlan plan = new UpdatePlan();
+    private Updater() {}
 
-        Set<String> wantedFiles = new HashSet<>();
+    private static final HttpClient HTTP = HttpClient.newBuilder()
+            .followRedirects(HttpClient.Redirect.NORMAL)
+            .build();
 
-        for (Manifest.ManifestMod mm : manifest.mods) {
-            if (mm == null || mm.fileName == null || mm.url == null || mm.sha256 == null) {
-                throw new IllegalStateException("Manifest contains a mod with missing fields (fileName/url/sha256).");
+    public interface ProgressCb {
+        void onProgress(int done, int total, String status);
+    }
+
+    public static Manifest fetchManifest(String url) throws IOException, InterruptedException {
+        HttpRequest req = HttpRequest.newBuilder().uri(URI.create(url)).GET().build();
+        HttpResponse<String> res = HTTP.send(req, HttpResponse.BodyHandlers.ofString());
+        if (res.statusCode() != 200) throw new IOException("Manifest HTTP " + res.statusCode());
+        try {
+            return BootstrapClient.GSON.fromJson(res.body(), Manifest.class);
+        } catch (JsonSyntaxException e) {
+            throw new IOException("Manifest JSON parse error: " + e.getMessage(), e);
+        }
+    }
+
+    /** Returns true if anything changed compared to what we previously owned. */
+    public static boolean stageAllMods(Manifest manifest, Path stagingModsDir, ProgressCb cb) throws Exception {
+        Files.createDirectories(stagingModsDir);
+
+        List<Manifest.ModEntry> list = manifest.mods == null ? List.of() : manifest.mods;
+        int total = list.size();
+        int done = 0;
+
+        boolean changedAny = false;
+
+        for (Manifest.ModEntry m : list) {
+            if (m == null || !m.required) { done++; continue; }
+            if (m.fileName == null || m.fileName.isBlank()) { done++; continue; }
+            if (m.url == null || m.url.isBlank()) throw new IOException("Missing url for " + m.fileName);
+            if (m.sha256 == null || m.sha256.isBlank()) throw new IOException("Missing sha256 for " + m.fileName);
+
+            cb.onProgress(done, total, "Downloading " + m.fileName);
+
+            Path out = stagingModsDir.resolve(m.fileName);
+            Path part = stagingModsDir.resolve(m.fileName + ".part");
+
+            downloadToFile(m.url, part);
+
+            cb.onProgress(done, total, "Verifying " + m.fileName);
+            String h = sha256(part);
+            if (!m.sha256.equalsIgnoreCase(h)) {
+                Files.deleteIfExists(part);
+                throw new IOException("SHA256 mismatch for " + m.fileName);
             }
 
-            wantedFiles.add(mm.fileName);
-
-            Path target = modsDir.resolve(mm.fileName);
-            boolean needsDownload = true;
-
-            if (Files.exists(target)) {
-                String currentHash = Sha256.ofFile(target);
-                if (mm.sha256.equalsIgnoreCase(currentHash)) {
-                    needsDownload = false;
-                } else {
-                    BootstrapLog.info("Hash mismatch for " + mm.fileName + " -> will update");
-                }
+            // If file exists and identical hash, no change
+            if (Files.exists(out)) {
+                String existing = sha256(out);
+                if (!existing.equalsIgnoreCase(h)) changedAny = true;
             } else {
-                BootstrapLog.info("Missing " + mm.fileName + " -> will install");
+                changedAny = true;
             }
 
-            if (needsDownload) {
-                Path staging = stagingDir.resolve(mm.fileName + ".download");
-                plan.downloads.add(new UpdatePlan.DownloadTask(mm, target, staging));
-            }
+            cb.onProgress(done, total, "Staging " + m.fileName);
+            Files.move(part, out, StandardCopyOption.REPLACE_EXISTING);
+
+            done++;
+            cb.onProgress(done, total, "Staged " + m.fileName);
         }
 
-        for (String owned : new HashSet<>(installed.ownedFiles)) {
-            if (!wantedFiles.contains(owned)) {
-                Path p = modsDir.resolve(owned);
-                plan.deletes.add(p);
-            }
-        }
-
-        return plan;
+        cb.onProgress(total, total, "Staging complete");
+        return changedAny;
     }
 
-    public static void apply(UpdatePlan plan) throws Exception {
-        for (UpdatePlan.DownloadTask task : plan.downloads) {
-            downloadVerifyAndInstall(task);
-        }
-
-        for (Path p : plan.deletes) {
-            try {
-                if (Files.exists(p)) {
-                    BootstrapLog.info("Deleting old owned mod: " + p.getFileName());
-                    Files.delete(p);
-                }
-            } catch (Exception e) {
-                BootstrapLog.warn("Failed to delete " + p.getFileName() + ": " + e.getMessage());
-            }
-        }
-
-        for (UpdatePlan.DownloadTask task : plan.downloads) {
-
-        }
+    public static void downloadToFile(String url, Path out) throws IOException, InterruptedException {
+        HttpRequest req = HttpRequest.newBuilder().uri(URI.create(url)).GET().build();
+        HttpResponse<Path> res = HTTP.send(req, HttpResponse.BodyHandlers.ofFile(out));
+        if (res.statusCode() != 200) throw new IOException("Download HTTP " + res.statusCode() + " for " + url);
     }
 
-    private static void downloadVerifyAndInstall(UpdatePlan.DownloadTask task) throws Exception {
-        Manifest.ManifestMod mm = task.mod;
-
-        BootstrapLog.info("Downloading " + mm.fileName);
-
-        Files.deleteIfExists(task.stagingFile);
-
-        HttpRequest req = HttpRequest.newBuilder()
-                .uri(URI.create(mm.url))
-                .timeout(Duration.ofSeconds(60))
-                .GET()
-                .build();
-
-        HttpResponse<InputStream> res = ManifestFetcher.client().send(req, HttpResponse.BodyHandlers.ofInputStream());
-
-        if (res.statusCode() < 200 || res.statusCode() >= 300) {
-            throw new IllegalStateException("Download failed for " + mm.fileName + ": HTTP " + res.statusCode());
+    public static String sha256(Path file) throws Exception {
+        MessageDigest md = MessageDigest.getInstance("SHA-256");
+        try (var in = Files.newInputStream(file)) {
+            byte[] buf = new byte[1024 * 1024];
+            int r;
+            while ((r = in.read(buf)) != -1) md.update(buf, 0, r);
         }
-
-        try (InputStream in = res.body()) {
-            Files.copy(in, task.stagingFile, StandardCopyOption.REPLACE_EXISTING);
-        }
-
-        String stagedHash = Sha256.ofFile(task.stagingFile);
-        if (!mm.sha256.equalsIgnoreCase(stagedHash)) {
-            Files.deleteIfExists(task.stagingFile);
-            throw new IllegalStateException("SHA-256 mismatch for " + mm.fileName + " (expected " + mm.sha256 + " got " + stagedHash + ")");
-        }
-
-        // Atomic-ish replace: move staging into place.
-        // On Windows, REPLACE_EXISTING is generally fine.
-        BootstrapLog.info("Installing " + mm.fileName);
-
-        Files.move(task.stagingFile, task.targetJar, StandardCopyOption.REPLACE_EXISTING);
+        byte[] dig = md.digest();
+        StringBuilder sb = new StringBuilder(dig.length * 2);
+        for (byte b : dig) sb.append(String.format("%02x", b));
+        return sb.toString();
     }
 }
