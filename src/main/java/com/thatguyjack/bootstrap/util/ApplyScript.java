@@ -88,6 +88,7 @@ if exist "%NEW_INSTALLED%" (
 
 echo Done. Launch Minecraft again.
 exit /b 0
+pause
 """;
 
         Files.writeString(bat, content, StandardCharsets.UTF_8, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
