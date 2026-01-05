@@ -2,23 +2,28 @@ package com.thatguyjack.bootstrap.util;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
-import java.nio.file.attribute.BasicFileAttributes;
 import java.util.*;
 
 public final class ApplierMain {
 
-    private static final int LOCK_RETRY_COUNT = 40;          // 40 * 250ms = 10s
+    private static final boolean DEBUG = false;
+
+    private static final int LOCK_RETRY_COUNT = 40;
     private static final long LOCK_RETRY_SLEEP_MS = 250;
-    private static final long POST_PID_EXIT_SLEEP_MS = 2500; // extra buffer after MC PID is gone
+    private static final long POST_PID_EXIT_SLEEP_MS = 2500;
 
     public static void main(String[] args) {
         Path gameDir = null;
+        Path stagingDir = null;
         Path logPath = null;
 
         try {
             Args a = Args.parse(args);
             gameDir = a.gameDir.toAbsolutePath().normalize();
-            logPath = gameDir.resolve("godsmp_apply_log.txt");
+            stagingDir = gameDir.resolve("godsmp_staging");
+            Files.createDirectories(stagingDir);
+
+            logPath = DEBUG ? stagingDir.resolve("godsmp_apply_log.txt") : null;
 
             log(logPath, "=== GodSMP Applier start ===");
             log(logPath, "gameDir=" + gameDir);
@@ -27,14 +32,11 @@ public final class ApplierMain {
             waitForPidExit(a.pid, logPath);
             Thread.sleep(POST_PID_EXIT_SLEEP_MS);
 
-            Path stagingDir = gameDir.resolve("godsmp_staging");
             Path stagingModsDir = stagingDir.resolve("mods");
             Path deleteList = stagingDir.resolve("delete.txt");
             Path newInstalled = stagingDir.resolve("installed.json");
 
             Path modsDir = gameDir.resolve("mods");
-            Path cfgDir = gameDir.resolve("config").resolve("godsmp_bootstrap");
-            Path installedPath = cfgDir.resolve("installed.json");
 
             if (!Files.isDirectory(modsDir)) {
                 throw new IllegalStateException("mods folder not found: " + modsDir);
@@ -94,15 +96,12 @@ public final class ApplierMain {
                 if (ok) copiedOk++; else copiedFail++;
             }
 
-            Files.createDirectories(cfgDir);
             if (Files.exists(newInstalled)) {
-                boolean ok = retryFileOp(logPath, "UPDATE installed.json", () -> {
-                    Files.copy(newInstalled, installedPath, StandardCopyOption.REPLACE_EXISTING);
-                });
-                if (!ok) log(logPath, "WARN: failed to update installed.json");
+                log(logPath, "staged installed.json present: " + newInstalled);
             } else {
                 log(logPath, "WARN: staged installed.json missing: " + newInstalled);
             }
+
 
             int jarsAfter = countJars(modsDir);
             log(logPath, "jars_after_apply=" + jarsAfter);
@@ -129,8 +128,8 @@ public final class ApplierMain {
                     for (StackTraceElement el : e.getStackTrace()) {
                         log(logPath, "  at " + el);
                     }
-                } else if (gameDir != null) {
-                    Files.writeString(gameDir.resolve("godsmp_apply_error.txt"),
+                } else if (gameDir != null && stagingDir != null) {
+                    Files.writeString(stagingDir.resolve("godsmp_apply_error.txt"),
                             "Apply failed: " + e + System.lineSeparator(),
                             StandardCharsets.UTF_8, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
                 }
@@ -178,12 +177,10 @@ public final class ApplierMain {
             if (line == null) continue;
             String name = line.trim();
             if (name.isEmpty()) continue;
-
-            // Only allow a simple jar filename
+            
             if (!name.endsWith(".jar")) continue;
             if (name.contains("/") || name.contains("\\") || name.contains("..")) continue;
 
-            // Skip fabric-api
             if (name.toLowerCase().startsWith("fabric-api")) continue;
 
             set.add(name);
@@ -228,6 +225,7 @@ public final class ApplierMain {
     }
 
     private static void log(Path logPath, String msg) {
+        if (!DEBUG || logPath  == null) return;
         try {
             Files.writeString(
                     logPath,

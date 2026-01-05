@@ -20,26 +20,23 @@ import java.util.stream.Collectors;
 public final class BootstrapClient implements ClientModInitializer {
     public static final Gson GSON = new Gson();
 
-    // ---- CONFIG ----
-    private static final String MANIFEST_URL =
+    public static final String MANIFEST_URL =
             "https://raw.githubusercontent.com/ThatGuyJack01/GodSMP-Pack/main/manifest.json";
 
-    // ---- STATE (read by UpdateScreen) ----
     public static volatile boolean busy = false;
     public static volatile boolean restartRequired = false;
     public static volatile String statusLine = "";
     public static volatile float progress01 = 0f;
     public static volatile String errorText = null;
 
+
     private static Path gameDir;
     private static Path modsDir;
     private static Path stagingDir;
     private static Path stagingModsDir;
-    private static Path cfgDir;
     private static Path installedPath;
     private static Path deleteListPath;
     private static Path stagedInstalledPath;
-    private static Path applyBatPath;
 
     @Override
     public void onInitializeClient() {
@@ -47,12 +44,9 @@ public final class BootstrapClient implements ClientModInitializer {
         modsDir = gameDir.resolve("mods");
         stagingDir = gameDir.resolve("godsmp_staging");
         stagingModsDir = stagingDir.resolve("mods");
-        cfgDir = gameDir.resolve("config").resolve("godsmp_bootstrap");
-        installedPath = cfgDir.resolve("installed.json");
         deleteListPath = stagingDir.resolve("delete.txt");
         stagedInstalledPath = stagingDir.resolve("installed.json");
 
-        // Force screen while busy/restart/error
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             if (!busy && !restartRequired && errorText == null) return;
             if (!(client.currentScreen instanceof UpdateScreen)) {
@@ -69,29 +63,24 @@ public final class BootstrapClient implements ClientModInitializer {
                 progress01 = 0f;
 
                 Files.createDirectories(stagingModsDir);
-                Files.createDirectories(cfgDir);
 
-                // Load old installed state
                 InstalledState oldState = loadInstalled();
 
                 statusLine = "Fetching manifest...";
                 Manifest manifest = Updater.fetchManifest(MANIFEST_URL);
 
-                // Stage all mods (download+verify into staging)
                 boolean stageChanged = Updater.stageAllMods(manifest, stagingModsDir,
                         (done, total, line) -> {
                             statusLine = line;
                             progress01 = total <= 0 ? 0f : (done / (float) total);
                         });
 
-                // Compute desired filenames
                 Set<String> desired = (manifest.mods == null ? List.<Manifest.ModEntry>of() : manifest.mods)
                         .stream()
                         .filter(m -> m != null && m.required && m.fileName != null && !m.fileName.isBlank())
                         .map(m -> m.fileName)
                         .collect(Collectors.toCollection(LinkedHashSet::new));
 
-                // Compute deletes = previously owned - desired
                 List<String> deletes = new ArrayList<>();
                 for (String owned : oldState.ownedFiles) {
                     if (owned == null) continue;
@@ -105,12 +94,10 @@ public final class BootstrapClient implements ClientModInitializer {
                     if (!desired.contains(owned)) deletes.add(owned);
                 }
 
-                // Write delete list for batch script
                 Files.createDirectories(stagingDir);
                 Files.write(deleteListPath, deletes, StandardCharsets.UTF_8,
                         StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
 
-                // Write new installed.json into staging (batch will copy it into config/)
                 InstalledState newState = new InstalledState();
                 newState.packId = manifest.packId;
                 newState.packVersion = manifest.packVersion;
@@ -119,7 +106,6 @@ public final class BootstrapClient implements ClientModInitializer {
                 Files.writeString(stagedInstalledPath, GSON.toJson(newState), StandardCharsets.UTF_8,
                         StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
 
-                // If nothing changed AND no deletes AND staged mods already identical, allow normal play.
                 boolean anything = stageChanged || !deletes.isEmpty();
 
                 busy = false;
@@ -129,7 +115,6 @@ public final class BootstrapClient implements ClientModInitializer {
                     statusLine = "Updates staged. Restart required.";
                     restartRequired = true;
                 } else {
-                    // Up to date, do nothing
                     MinecraftClient.getInstance().execute(() -> {
                         MinecraftClient client = MinecraftClient.getInstance();
                         if (client.currentScreen instanceof UpdateScreen) client.setScreen(null);
@@ -144,7 +129,6 @@ public final class BootstrapClient implements ClientModInitializer {
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             try {
                 if (BootstrapClient.restartRequired) {
-                    // Spawn applier if it hasn't started yet
                     BootstrapClient.startApplyAndQuit();
                 }
             } catch (Exception ignored) {}
