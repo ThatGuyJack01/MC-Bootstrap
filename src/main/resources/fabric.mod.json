@@ -3,9 +3,9 @@
 	"id": "bootstrap",
 	"version": "${version}",
 	"name": "Bootstrap",
-	"description": "This is an example description! Tell everyone what your mod is about!",
+	"description": "GodSMP auto updater mod",
 	"authors": [
-		"Me!"
+		"ThatGuyJack"
 	],
 	"contact": {
 		"homepage": "https://fabricmc.net/",

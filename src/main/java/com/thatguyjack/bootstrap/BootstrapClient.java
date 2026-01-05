@@ -2,9 +2,9 @@ package com.thatguyjack.bootstrap;
 
 import com.google.gson.Gson;
 import com.thatguyjack.bootstrap.screen.UpdateScreen;
-import com.thatguyjack.bootstrap.util.ApplyScript;
 import com.thatguyjack.bootstrap.util.InstalledState;
 import com.thatguyjack.bootstrap.util.Manifest;
+import com.thatguyjack.bootstrap.util.ModPaths;
 import com.thatguyjack.bootstrap.util.Updater;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
@@ -94,6 +94,14 @@ public final class BootstrapClient implements ClientModInitializer {
                 // Compute deletes = previously owned - desired
                 List<String> deletes = new ArrayList<>();
                 for (String owned : oldState.ownedFiles) {
+                    if (owned == null) continue;
+                    owned = owned.trim();
+
+                    if (owned.isEmpty()) continue;
+
+                    if (owned.toLowerCase().startsWith("fabric-api")) continue;
+
+                    if (!owned.endsWith(".jar")) continue;
                     if (!desired.contains(owned)) deletes.add(owned);
                 }
 
@@ -120,9 +128,6 @@ public final class BootstrapClient implements ClientModInitializer {
                 if (anything) {
                     statusLine = "Updates staged. Restart required.";
                     restartRequired = true;
-
-                    // Write the apply script
-                    applyBatPath = ApplyScript.writeBatch(gameDir);
                 } else {
                     // Up to date, do nothing
                     MinecraftClient.getInstance().execute(() -> {
@@ -135,6 +140,15 @@ public final class BootstrapClient implements ClientModInitializer {
                 errorText = (e.getMessage() == null ? e.toString() : e.getMessage());
             }
         });
+
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            try {
+                if (BootstrapClient.restartRequired) {
+                    // Spawn applier if it hasn't started yet
+                    BootstrapClient.startApplyAndQuit();
+                }
+            } catch (Exception ignored) {}
+        }));
     }
 
     private static InstalledState loadInstalled() {
@@ -148,14 +162,36 @@ public final class BootstrapClient implements ClientModInitializer {
         }
     }
 
-    /** Called from the UpdateScreen button. */
     public static void startApplyAndQuit() throws Exception {
-        if (applyBatPath == null) applyBatPath = ApplyScript.writeBatch(gameDir);
-
         long pid = ProcessHandle.current().pid();
-        ApplyScript.runBatchDetached(applyBatPath, pid);
 
-        // Quit MC
+        String javaHome = System.getProperty("java.home");
+        Path javaExe = Path.of(javaHome, "bin", isWindows() ? "java.exe" : "java");
+
+        Path bootstrapJar = ModPaths.getThisModJar(Bootstrap.MOD_ID);
+
+        String gameDirStr = gameDir.toAbsolutePath().normalize().toString();
+
+        ProcessBuilder pb = new ProcessBuilder(
+                javaExe.toString(),
+                "-cp", bootstrapJar.toString(),
+                "com.thatguyjack.bootstrap.util.ApplierMain",
+                "--gameDir", gameDirStr,
+                "--pid", Long.toString(pid)
+        );
+
+        pb.directory(gameDir.toFile());
+        pb.redirectErrorStream(true);
+
+        pb.inheritIO();
+
+        pb.start();
+
         MinecraftClient.getInstance().scheduleStop();
+    }
+
+    private static boolean isWindows() {
+        String os = System.getProperty("os.name").toLowerCase();
+        return os.contains("win");
     }
 }
